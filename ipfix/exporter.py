@@ -176,8 +176,4 @@ class IPFIXExporter:
             if remaining:
                 self._export_flows(remaining)
         except Exception:
-<<<<<<< HEAD
             pass
-=======
-            pass
->>>>>>> 135d73db5955d64763ec52ac5c66d09f3687934c

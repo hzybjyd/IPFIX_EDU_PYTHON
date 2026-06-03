@@ -281,8 +281,4 @@ class FlowMeter:
         # 构建 5-tuple 并更新流表
         key = FlowKey(src_ip, dst_ip, src_port, dst_port, protocol)
         self.flow_table.update_flow(key, pkt_size, tcp_flags)
-<<<<<<< HEAD
         self.processed_count += 1
-=======
-        self.processed_count += 1
->>>>>>> 135d73db5955d64763ec52ac5c66d09f3687934c

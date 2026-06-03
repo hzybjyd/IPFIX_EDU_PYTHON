@@ -155,8 +155,4 @@ class PacketCapture:
         except queue.Full:
             # 队列满, 丢弃报文 (防止内存溢出)
             if DEBUG.get("verbose"):
-<<<<<<< HEAD
                 print(f"[数据包捕获] 队列已满, 丢弃报文")
-=======
-                print(f"[数据包捕获] 队列已满, 丢弃报文")
->>>>>>> 135d73db5955d64763ec52ac5c66d09f3687934c

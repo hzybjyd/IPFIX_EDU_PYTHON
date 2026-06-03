@@ -105,8 +105,4 @@ class IPFIXCollector:
     def get_received_flows(self) -> list[dict]:
         """获取最近收到的流记录"""
         with self._flows_lock:
-<<<<<<< HEAD
             return list(self.received_flows)
-=======
-            return list(self.received_flows)
->>>>>>> 135d73db5955d64763ec52ac5c66d09f3687934c

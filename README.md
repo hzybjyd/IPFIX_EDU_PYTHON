@@ -230,8 +230,4 @@ internet_config/
 2. **Npcap 驱动** — 未安装则 Scapy 无法嗅探，程序启动会提示
 3. **仅支持 IPv4** — 不支持 IPv6 流
 4. **单网卡** — 默认使用系统路由接口，可通过 `CAPTURE.interface` 指定
-<<<<<<< HEAD
 5. **防火墙** — 首次运行可能触发 Windows 防火墙提示，需允许 Python 访问网络
-=======
-5. **防火墙** — 首次运行可能触发 Windows 防火墙提示，需允许 Python 访问网络
->>>>>>> 135d73db5955d64763ec52ac5c66d09f3687934c

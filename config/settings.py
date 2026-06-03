@@ -61,8 +61,4 @@ FILTER = {
 DEBUG = {
     "verbose": False,           # 是否打印详细日志
     "log_packet_count": 1000,   # 每 N 个包打印一次进度
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> 135d73db5955d64763ec52ac5c66d09f3687934c

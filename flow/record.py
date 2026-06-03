@@ -119,4 +119,8 @@ class FlowRecord:
             "bytes": self.byte_count,
             "duration": self.duration_sec,
             "state": self.state.name,
+<<<<<<< HEAD
         }
+=======
+        }
+>>>>>>> 135d73db5955d64763ec52ac5c66d09f3687934c

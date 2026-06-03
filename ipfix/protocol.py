@@ -288,4 +288,8 @@ class IPFIXDecoder:
             flows.append(record)
             offset += record_size
 
+<<<<<<< HEAD
         return flows
+=======
+        return flows
+>>>>>>> 135d73db5955d64763ec52ac5c66d09f3687934c

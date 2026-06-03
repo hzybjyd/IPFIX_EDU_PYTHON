@@ -220,7 +220,7 @@ internet_config/
 程序运行时在 `./ipfix_data/` 下创建以时间戳命名的子目录（如 `20250603_143052/`），每次导出写入 `.ipfix` 文件。
 为了方便教学演示，每个导出的文件包含 **Template Set + Data Set** 的完整 IPFIX Message，可直接用 Wireshark 打开验证：
 ![alt text](image/image-1.png)
----
+
 事实上工程化的ipfix文件不会每个都包含Template Set，这会造成大量的数据浪费,而是根据实际需要定时重发。
 而不包含Template Set的文件，wireshark是无法单独解析的.
 ![alt text](image/image-0.png)

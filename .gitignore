@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Virtualenv
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+.trae/
+*.swp
+*.swo
+
+# Project specific
+ipfix_data/
+*.ipfix
+
+# OS
+.DS_Store
+Thumbs.db

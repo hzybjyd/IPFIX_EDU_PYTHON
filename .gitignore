@@ -21,6 +21,9 @@ env/
 ipfix_data/
 *.ipfix
 
+# Images (不上传图片)
+image/
+
 # OS
 .DS_Store
 Thumbs.db

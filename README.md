@@ -4,6 +4,7 @@
 
 本项目是一个基于 IPFIX 标准的实时网络流量计量系统。所有内容默认采用IPFIX标准格式,适用于教学演示及IPFIX原理学习。
 采用GUI界面显示流计量结果，用户可以通过界面进行筛选和操作。
+
 ![alt text](image/image.png)
 ---
 
@@ -219,11 +220,14 @@ internet_config/
 
 程序运行时在 `./ipfix_data/` 下创建以时间戳命名的子目录（如 `20250603_143052/`），每次导出写入 `.ipfix` 文件。
 为了方便教学演示，每个导出的文件包含 **Template Set + Data Set** 的完整 IPFIX Message，可直接用 Wireshark 打开验证：
+
 ![alt text](image/image-1.png)
 
 事实上工程化的ipfix文件不会每个都包含Template Set，这会造成大量的数据浪费,而是根据实际需要定时重发。
 而不包含Template Set的文件，wireshark是无法单独解析的.
+
 ![alt text](image/image-0.png)
+
 ## 注意事项
 
 1. **管理员权限必需** — 数据包捕获需要管理员权限，程序启动时会自动检测

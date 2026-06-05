@@ -9,7 +9,7 @@
 #   5. 退出时优雅停止所有线程
 #
 # 快捷键:
-#   [Q] 退出    [1] 查看流详情    [2] 流统计    [3] 筛选配置
+#   [Q] 退出    [1] 查看流详情    [2] 流统计    [3] 筛选配置    [4] 阻断管理
 
 import sys
 import os
@@ -61,13 +61,15 @@ from rich.text import Text
 from rich.layout import Layout
 from rich import box
 
-from config.settings import CAPTURE, FLOW, IPFIX, DISPLAY, FILTER, DEBUG
+from config.settings import CAPTURE, FLOW, IPFIX, DISPLAY, FILTER, DEBUG, BLOCK
 from capture.sniffer import PacketCapture
 from flow.record import FlowRecord, FlowState
 from flow.meter import FlowTable, FlowMeter
 from ipfix.protocol import IPFIXEncoder
 from ipfix.exporter import IPFIXExporter
 from ipfix.collector import IPFIXCollector
+from block.rules import RuleManager
+from block.blocker import Blocker
 
 # ════════════════════════════════════════════════════════════════
 #  全局状态
@@ -133,25 +135,26 @@ def _apply_flow_filter(flows: list, filter_config: dict) -> list:
 #  显示构建 (直接内联, 简化依赖)
 # ════════════════════════════════════════════════════════════════
 
-def build_display(packet_capture, flow_table, ipfix_exporter, ipfix_collector) -> Layout:
+def build_display(packet_capture, flow_table, ipfix_exporter, ipfix_collector, blocker=None) -> Layout:
     """
     构建 Rich 布局: 标题栏 + 流表格 + 统计面板 + 快捷键栏
     """
     layout = Layout()
+    header_size = 4 if blocker else 3
     layout.split(
-        Layout(name="header", size=3),
+        Layout(name="header", size=header_size),
         Layout(name="body"),
         Layout(name="footer", size=3),
     )
     layout["body"].split_column(
         Layout(_build_flow_table(flow_table), name="flows"),
-        Layout(_build_stats(packet_capture, flow_table, ipfix_exporter, ipfix_collector), name="stats", size=9),
+        Layout(_build_stats(packet_capture, flow_table, ipfix_exporter, ipfix_collector, blocker), name="stats", size=10),
     )
-    layout["header"].update(_build_header())
+    layout["header"].update(_build_header(blocker))
     layout["footer"].update(_build_footer())
     return layout
 
-def _build_header() -> Panel:
+def _build_header(blocker=None) -> Panel:
     title = Text("IPFIX 流计量监控系统", style="bold cyan")
     sub = Text("RFC 7011 | Python + Scapy + Npcap | Windows", style="dim italic")
 
@@ -163,6 +166,14 @@ def _build_header() -> Panel:
         flt_parts.append(f"BPF: {_describe_filter(FILTER['bpf'])}")
     if flt_parts:
         sub = Text.assemble(sub, "\n", ("  " + "  |  ".join(flt_parts), "bold yellow"))
+
+    # 阻断引擎状态
+    if blocker:
+        stats = blocker.get_stats()
+        rules_n = len(blocker.rule_manager)
+        enabled_n = stats["rules_enabled"]
+        status_text = f"阻断: 已开启 ({enabled_n}/{rules_n} 条规则)"
+        sub = Text.assemble(sub, "\n", ("  " + status_text, "bold red"))
 
     return Panel(Text.assemble(title, "\n", sub), style="cyan")
 
@@ -213,7 +224,7 @@ def _build_flow_table(flow_table) -> Panel:
         title = f"活跃流 ({len(active_flows)})"
     return Panel(table, title=title, border_style="blue")
 
-def _build_stats(packet_capture, flow_table, ipfix_exporter, ipfix_collector) -> Panel:
+def _build_stats(packet_capture, flow_table, ipfix_exporter, ipfix_collector, blocker=None) -> Panel:
     stats = flow_table.get_stats()
     col_stats = ipfix_collector.get_stats()
     pc = packet_capture.packet_count
@@ -250,6 +261,28 @@ def _build_stats(packet_capture, flow_table, ipfix_exporter, ipfix_collector) ->
 
     content = Text.assemble(line1, "\n", line2)
 
+    # 阻断统计行
+    if blocker:
+        b_stats = blocker.get_stats()
+        line3 = Text.assemble(
+            ("阻断: ", ""),
+            (str(b_stats['blocked']), "bold red"),
+            (" 次  |  规则: ", ""),
+            (str(b_stats['rules_enabled']), "red"),
+            (" 条", ""),
+        )
+        recent = blocker.get_recent_blocked()
+        if recent:
+            last = recent[-1]
+            proto_name = {6: "TCP", 17: "UDP", 1: "ICMP"}.get(last["protocol"], str(last["protocol"]))
+            line3.append("  |  最近: ", "")
+            line3.append(f"{last['dst_ip']}:{last['dst_port']} {proto_name}", "red")
+        content.append("\n")
+        content.append(line3)
+    else:
+        content.append("\n")
+        content.append(Text("阻断: 未启用", style="dim"))
+
     # 筛选摘要行
     if disp_active or _has_filter_criteria(FILTER["bpf"]):
         parts = []
@@ -272,6 +305,8 @@ def _build_footer() -> Panel:
         ("统计", ""),
         ("  [3]", "bold white"),
         ("筛选", ""),
+        ("  [4]", "bold white"),
+        ("阻断", ""),
     ]
     tips = Text.assemble(*parts)
     return Panel(tips, style="grey50")
@@ -406,7 +441,170 @@ def show_filter_menu(packet_capture):
         elif choice == 'x':
             break
 
-def handle_menu_key(key: str, packet_capture, flow_table, ipfix_exporter, ipfix_collector):
+# ════════════════════════════════════════════════════════════════
+#  阻断管理菜单
+# ════════════════════════════════════════════════════════════════
+
+def _show_block_rules(blocker):
+    """显示当前阻断规则列表"""
+    rules = blocker.rule_manager.get_all_rules()
+    if not rules:
+        console.print("  (无阻断规则)", style="dim")
+        return
+    console.print(f"  {'#':<4} {'IP':<16} {'源端口':<8} {'目的端口':<8} {'协议':<8} {'状态':<8}")
+    console.print("  " + "-" * 60)
+    for i, r in enumerate(rules):
+        ip = r['ip'] or "-"
+        sp = str(r['src_port']) if r['src_port'] else "-"
+        dp = str(r['dst_port']) if r['dst_port'] else "-"
+        proto = r['protocol'] or "-"
+        status = "[green]启用[/]" if r['enabled'] else "[dim]禁用[/]"
+        console.print(f"  {i+1:<4} {ip:<16} {sp:<8} {dp:<8} {proto:<8} {status}")
+
+def _add_block_rule(blocker):
+    """添加阻断规则的交互流程"""
+    console.print()
+    console.print("[bold]添加阻断规则[/] (回车=不限)", style="yellow")
+    console.print()
+
+    ip = input("  IP 地址 (匹配源或目的): ").strip()
+    protocol = input("  协议 (TCP/UDP/ICMP, 回车=不限): ").strip().upper()
+    if protocol and protocol not in ("TCP", "UDP", "ICMP"):
+        console.print("[red]无效协议，已忽略[/]")
+        protocol = ""
+
+    try:
+        src_port = int(input("  源端口 (0=不限): ").strip() or "0")
+    except ValueError:
+        src_port = 0
+    try:
+        dst_port = int(input("  目的端口 (0=不限): ").strip() or "0")
+    except ValueError:
+        dst_port = 0
+
+    if not ip and not protocol and not src_port and not dst_port:
+        console.print("[red]至少需要一个筛选条件[/]")
+        return
+
+    rule = {
+        "ip": ip,
+        "src_port": src_port,
+        "dst_port": dst_port,
+        "protocol": protocol,
+        "enabled": True,
+    }
+    idx = blocker.rule_manager.add_rule(rule)
+    console.print(f"[green]规则 #{idx+1} 已添加: {blocker.rule_manager.describe_rule(rule)}[/]")
+
+def _remove_block_rule(blocker):
+    """删除阻断规则"""
+    rules = blocker.rule_manager.get_all_rules()
+    if not rules:
+        console.print("  (无规则可删除)", style="dim")
+        return
+    _show_block_rules(blocker)
+    try:
+        idx = int(input("\n  输入要删除的规则编号: ").strip()) - 1
+    except ValueError:
+        return
+    if blocker.rule_manager.remove_rule(idx):
+        console.print(f"[green]规则 #{idx+1} 已删除[/]")
+    else:
+        console.print("[red]无效编号[/]")
+
+def show_block_menu(blocker):
+    """
+    阻断规则管理菜单
+    ────────────────
+    [1] 添加规则  [2] 删除规则  [3] 启用/禁用  [4] 清除全部
+    [5] 开启/关闭阻断引擎  [6] 查看最近阻断事件
+    [X] 返回
+    """
+    while True:
+        console.clear()
+        console.print(Panel("阻断规则管理 (WinDivert WFP 内核级)", style="bold red"))
+
+        # 显示引擎状态
+        engine_status = "[green]已开启[/]" if BLOCK["enabled"] else "[red]已关闭[/]"
+        console.print(f"  阻断引擎: {engine_status}")
+        console.print()
+
+        # 显示规则列表
+        _show_block_rules(blocker)
+        console.print()
+
+        # 显示阻断统计
+        b_stats = blocker.get_stats()
+        console.print(f"  累计阻断: [bold red]{b_stats['blocked']}[/] 次  |  "
+                      f"已放行: [cyan]{b_stats['reinjected']}[/] 个报文")
+        console.print()
+
+        # 菜单选项
+        console.print("  [1] 添加阻断规则")
+        console.print("  [2] 删除阻断规则")
+        console.print("  [3] 启用/禁用单条规则")
+        console.print("  [4] 清除全部规则")
+        console.print("  [5] 开启/关闭阻断引擎")
+        console.print("  [6] 查看最近阻断事件")
+        console.print("  [X] 返回主界面")
+
+        choice = input("\n选择: ").strip().lower()
+
+        if choice == '1':
+            _add_block_rule(blocker)
+            input("\n按回车返回...")
+        elif choice == '2':
+            _remove_block_rule(blocker)
+            input("\n按回车返回...")
+        elif choice == '3':
+            rules = blocker.rule_manager.get_all_rules()
+            if not rules:
+                console.print("  (无规则)", style="dim")
+            else:
+                _show_block_rules(blocker)
+                try:
+                    idx = int(input("\n  输入要切换的规则编号: ").strip()) - 1
+                    new_state = blocker.rule_manager.toggle_rule(idx)
+                    if new_state is not None:
+                        state_str = "启用" if new_state else "禁用"
+                        console.print(f"[green]规则 #{idx+1} 已{state_str}[/]")
+                    else:
+                        console.print("[red]无效编号[/]")
+                except ValueError:
+                    pass
+            input("\n按回车返回...")
+        elif choice == '4':
+            blocker.rule_manager.clear_rules()
+            console.print("[green]已清除全部阻断规则[/]")
+            input("\n按回车返回...")
+        elif choice == '5':
+            BLOCK["enabled"] = not BLOCK["enabled"]
+            state_str = "已开启" if BLOCK["enabled"] else "已关闭"
+            console.print(f"[yellow]阻断引擎{state_str}[/]")
+            console.print("[dim]注意: 引擎开关仅控制 UI 显示, 实际阻断由规则列表控制[/]")
+            input("\n按回车返回...")
+        elif choice == '6':
+            recent = blocker.get_recent_blocked()
+            if not recent:
+                console.print("  (无阻断记录)", style="dim")
+            else:
+                console.print(f"\n  最近 {len(recent)} 条阻断事件:")
+                console.print(f"  {'#':<4} {'时间':<10} {'源 IP':<16} {'源端口':<8} "
+                              f"{'目的 IP':<16} {'目的端口':<8} {'协议':<6}")
+                console.print("  " + "-" * 70)
+                for i, evt in enumerate(recent):
+                    t = time.strftime("%H:%M:%S", time.localtime(evt["time"]))
+                    proto_name = {6: "TCP", 17: "UDP", 1: "ICMP"}.get(
+                        evt["protocol"], str(evt["protocol"]))
+                    console.print(
+                        f"  {i+1:<4} {t:<10} {evt['src_ip']:<16} {evt['src_port']:<8} "
+                        f"{evt['dst_ip']:<16} {evt['dst_port']:<8} {proto_name:<6}")
+            input("\n按回车返回...")
+        elif choice == 'x':
+            break
+
+
+def handle_menu_key(key: str, packet_capture, flow_table, ipfix_exporter, ipfix_collector, blocker=None):
     """
     处理键盘快捷键
     ──────────────
@@ -430,10 +628,18 @@ def handle_menu_key(key: str, packet_capture, flow_table, ipfix_exporter, ipfix_
         col_stats = ipfix_collector.get_stats()
         console.print(f"  收集器消息:       {col_stats['messages_received']}")
         console.print(f"  收集器流数:       {col_stats['flows_received']}")
+        if blocker:
+            b_stats = blocker.get_stats()
+            console.print(f"  阻断次数:         {b_stats['blocked']}")
+            console.print(f"  已放行报文:       {b_stats['reinjected']}")
+            console.print(f"  启用规则数:       {b_stats['rules_enabled']}")
         input("\n按回车返回...")
 
     elif key == '3':
         show_filter_menu(packet_capture)
+
+    elif key == '4' and blocker:
+        show_block_menu(blocker)
 
 # ════════════════════════════════════════════════════════════════
 #  启动前筛选向导
@@ -495,13 +701,14 @@ def main():
     console.print()
     console.print(Panel(
         "[bold cyan]IPFIX 流计量系统[/]\n"
-        "[dim]基于 RFC 7011 | Python + Scapy + Npcap[/]\n\n"
+        "[dim]基于 RFC 7011 | Python + Scapy + WinDivert[/]\n\n"
         "功能:\n"
         "  • 数据包捕获与流计量 (5-tuple 哈希)\n"
         "  • IPFIX 协议编码与导出 (UDP + 文件)\n"
         "  • IPFIX 收集器 (导出-收集闭环验证)\n"
+        "  • WinDivert WFP 内核级阻断 (IP/端口/协议)\n"
         "  • Rich 控制台实时展现",
-        title="🚀 系统初始化",
+        title="系统初始化",
         border_style="cyan"
     ))
 
@@ -520,6 +727,10 @@ def main():
         import psutil
     except ImportError:
         missing.append("psutil")
+    try:
+        import pydivert
+    except ImportError:
+        missing.append("pydivert")
 
     if missing:
         console.print(f"[错误] 缺少依赖: {', '.join(missing)}", style="bold red")
@@ -534,8 +745,18 @@ def main():
     # 共享队列 (捕获 → 流计量)
     packet_queue = queue.Queue(maxsize=10000)
 
+    # 阻断规则管理器
+    rule_manager = RuleManager(rules=BLOCK.get("rules", []))
+
+    # WinDivert 内核阻断器
+    blocker = Blocker(
+        rule_manager=rule_manager,
+        packet_queue=packet_queue,
+        recent_max=BLOCK.get("recent_blocked_max", 50),
+    )
+
     # 各模块
-    capture = PacketCapture(packet_queue)
+    capture = PacketCapture(packet_queue, blocker=blocker)
     flow_table = FlowTable()
     flow_meter = FlowMeter(packet_queue, flow_table)
     ipfix_exporter = IPFIXExporter(flow_table)
@@ -562,7 +783,7 @@ def main():
     # ── 主循环: Rich Live 显示 + 键盘交互 ──
     try:
         with Live(
-            build_display(capture, flow_table, ipfix_exporter, ipfix_collector),
+            build_display(capture, flow_table, ipfix_exporter, ipfix_collector, blocker),
             console=console,
             screen=True,
             refresh_per_second=4,
@@ -571,7 +792,7 @@ def main():
             while running:
                 # 更新显示
                 live.update(
-                    build_display(capture, flow_table, ipfix_exporter, ipfix_collector)
+                    build_display(capture, flow_table, ipfix_exporter, ipfix_collector, blocker)
                 )
 
                 # 检查键盘输入 (Windows)
@@ -582,12 +803,12 @@ def main():
                         running = False
                         break
 
-                    if ch in ('1', '2', '3'):
+                    if ch in ('1', '2', '3', '4'):
                         live.stop()  # 暂停 Live 显示
                         try:
                             handle_menu_key(
                                 ch, capture, flow_table,
-                                ipfix_exporter, ipfix_collector
+                                ipfix_exporter, ipfix_collector, blocker
                             )
                         except Exception as e:
                             console.print("[" + ("错误") + f"] {e}", style="red")
@@ -601,12 +822,12 @@ def main():
                         if ch in ('q', '0'):
                             running = False
                             break
-                        if ch in ('1', '2', '3'):
+                        if ch in ('1', '2', '3', '4'):
                             live.stop()
                             try:
                                 handle_menu_key(
                                     ch, capture, flow_table,
-                                    ipfix_exporter, ipfix_collector
+                                    ipfix_exporter, ipfix_collector, blocker
                                 )
                             except Exception as e:
                                 console.print("[" + ("错误") + f"] {e}", style="red")
@@ -636,6 +857,9 @@ def main():
     console.print(f"    " + ("导出流:") + "     {flow_table.total_flows_exported}")
     console.print(f"    " + ("导出次数:") + "   {ipfix_exporter.export_count}")
     console.print(f"    " + ("收集消息:") + "   {ipfix_collector.messages_received}")
+    b_stats = blocker.get_stats()
+    console.print(f"    " + ("阻断次数:") + "   {b_stats['blocked']}")
+    console.print(f"    " + ("已放行:") + "     {b_stats['reinjected']}")
 
 if __name__ == "__main__":
     main()

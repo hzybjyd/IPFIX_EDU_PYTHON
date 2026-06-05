@@ -57,6 +57,19 @@ FILTER = {
     },
 }
 
+# ---------- 阻断配置 (基于 WinDivert WFP 内核级阻断) ----------
+BLOCK = {
+    "enabled": True,              # 是否启用内核阻断引擎
+    "rules": [                    # 预置阻断规则 (运行时可通过菜单动态修改)
+        # 示例:
+        # {"ip": "10.0.0.1", "src_port": 0, "dst_port": 0, "protocol": "", "enabled": True},
+        # {"ip": "", "src_port": 0, "dst_port": 80, "protocol": "TCP", "enabled": True},
+        # {"ip": "", "src_port": 0, "dst_port": 443, "protocol": "TCP", "enabled": True},
+        # {"ip": "", "src_port": 0, "dst_port": 0, "protocol": "UDP", "enabled": True},
+    ],
+    "recent_blocked_max": 50,     # UI 展示的最近阻断事件数量
+}
+
 # ---------- 调试配置 ----------
 DEBUG = {
     "verbose": False,           # 是否打印详细日志
